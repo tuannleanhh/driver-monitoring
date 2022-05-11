@@ -58,7 +58,7 @@ def to_numpy(tensor):
 
 def _preprocess(img):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (320, 192))
+    img = cv2.resize(img, (320, 320))
     img = img / 255.0
     img = np.expand_dims(img, axis=0).astype(np.float32)
     img = torch.from_numpy(img).permute(0, 3, 1, 2)
