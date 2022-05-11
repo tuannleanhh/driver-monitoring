@@ -1,0 +1,1 @@
+from face_detector.yolov5face_detector import FaceDetector
