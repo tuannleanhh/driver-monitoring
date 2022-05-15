@@ -7,11 +7,13 @@ from utils import *
 
 
 def run_on_video(video_path, save_dir, plot=False, save=False):
-    face_detector = FaceDetector('checkpoints/torch_ckpts/yolo-ep299.pt')
-    drowsiness_detector = DrowsinessDetector('checkpoints/tflite_ckpts/drowsiness.tflite')
+    face_detector = FaceDetector('checkpoints/onnx_ckpts/yolov5face.onnx')
+    drowsiness_detector = DrowsinessDetector('checkpoints/onnx_ckpts/drowsiness.onnx')
     head_pose_estimator = HopeNetEstimator('checkpoints/onnx_ckpts/hopenet.onnx')
-    video_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    # video_capture = cv2.VideoCapture(video_path)
+    if plot:
+        video_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    else:
+        video_capture = cv2.VideoCapture(video_path)
     check_save_dir(save_dir)
     writer = create_video_write(video_capture, save_dir)
     progressbar = create_progress_bar(video_capture)
@@ -20,6 +22,9 @@ def run_on_video(video_path, save_dir, plot=False, save=False):
     count_drowsiness = 0
     sum_frame = 0
     fps = 0
+    sum_med_fps = 0
+    sum_hp_fps = 0
+    sum_face_fps = 0
     while True:
         ok, im = video_capture.read()
         if not ok:
@@ -30,12 +35,16 @@ def run_on_video(video_path, save_dir, plot=False, save=False):
         img = image.copy()
 
         # detect face and draw face box
+        t_1 = time.time()
         x_min, y_min, x_max, y_max = face_detector.detect(img)
+        sum_face_fps += (time.time() - t_1)
         face = img.copy()[int(y_min): int(y_max), int(x_min): int(x_max)]
         cv2.rectangle(img, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
 
         # Detect head pose and draw pose + type face
+        t_2 = time.time()
         yaw, pitch, roll, type_face = head_pose_estimator.estimate(img, x_min, y_min, x_max, y_max)
+        sum_hp_fps += (time.time() - t_2)
         cv2.putText(img, f"yaw: {yaw:.2f}", (int(img.shape[1] * 0.03), int(img.shape[0] * 0.04)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (52, 236, 76), 2, cv2.LINE_AA)
         cv2.putText(img, f"pitch: {pitch:.2f}", (int(img.shape[1] * 0.03), int(img.shape[0] * 0.08)),
@@ -60,7 +69,9 @@ def run_on_video(video_path, save_dir, plot=False, save=False):
 
         # draw drowsiness alert
         if type_face == 'no mask' and count_head_pose == 0:
+            t_3 = time.time()
             reye, leye = drowsiness_detector.detect(face.copy())
+            sum_med_fps += (time.time() - t_3)
             if reye == 0 or leye == 0:
                 count_drowsiness += 1
                 if count_drowsiness >= 30:
@@ -80,10 +91,13 @@ def run_on_video(video_path, save_dir, plot=False, save=False):
             if cv2.waitKey(1) == ord('q'):
                 break
 
-        fps += (1 / (t2 - t1))
+        fps += t2 - t1
         sum_frame += 1
         progressbar.update(1)
 
-    print(f'\nAVERAGE THREAD FPS: {fps / sum_frame}')
+    print(f'\nAVERAGE THREAD FPS: {1 / (fps / sum_frame)}')
+    print(f'\nAVERAGE FACE DETECT FPS: {1 / (sum_face_fps / sum_frame)}')
+    print(f'\nAVERAGE HEAD POSE FPS: {1 / (sum_hp_fps / sum_frame)}')
+    print(f'\nAVERAGE DROWSI FPS: {1 / (sum_med_fps / sum_frame)}')
     video_capture.release()
     cv2.destroyAllWindows()

@@ -40,10 +40,10 @@ def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
 
 def clip_coords(boxes, img_shape):
     # Clip bounding xyxy bounding boxes to image shape (height, width)
-    boxes[:, 0].clamp_(0, img_shape[1])  # x1
-    boxes[:, 1].clamp_(0, img_shape[0])  # y1
-    boxes[:, 2].clamp_(0, img_shape[1])  # x2
-    boxes[:, 3].clamp_(0, img_shape[0])  # y2
+    boxes[:, 0].clip(0, img_shape[1])  # x1
+    boxes[:, 1].clip(0, img_shape[0])  # y1
+    boxes[:, 2].clip(0, img_shape[1])  # x2
+    boxes[:, 3].clip(0, img_shape[0])  # y2
 
 
 def box_iou(box1, box2):
@@ -187,6 +187,39 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
     return output
 
 
+def numpy_nms(boxes, scores, iou_thresh):
+    """
+        boxes is a numpy array : num_dets, 4
+        scores is a nump array : num_dets,
+    """
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]  # get boxes with more ious first
+
+    keep = []
+    while order.size > 0:
+        i = order[0]  # pick maxmum iou box
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        w = np.maximum(0.0, xx2 - xx1 + 1)  # maximum width
+        h = np.maximum(0.0, yy2 - yy1 + 1)  # maxiumum height
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+        inds = np.where(ovr <= iou_thresh)[0]
+        order = order[inds + 1]
+
+    return keep
+
+
 def non_max_suppression_face(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, labels=()):
     """Performs Non-Maximum Suppression (NMS) on inference results
     Returns:
@@ -204,18 +237,18 @@ def non_max_suppression_face(prediction, conf_thres=0.25, iou_thres=0.45, classe
     merge = False  # use merge-NMS
 
     t = time.time()
-    output = [torch.zeros((0, 6), device=prediction.device)] * prediction.shape[0]
+    output = [np.zeros((0, 6))] * prediction.shape[0]
     for xi, x in enumerate(prediction):  # image index, image inference
         x = x[xc[xi]]  # confidence
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
             l = labels[xi]
-            v = torch.zeros((len(l), nc + 5), device=x.device)
+            v = np.zeros((len(l), nc + 5))
             v[:, :4] = l[:, 1:5]  # box
             v[:, 4] = 1.0  # conf
             v[range(len(l)), l[:, 0].long() + 5] = 1.0  # cls
-            x = torch.cat((x, v), 0)
+            x = np.concatenate((x, v), axis=0)
 
         # If none remain process next image
         if not x.shape[0]:
@@ -230,14 +263,14 @@ def non_max_suppression_face(prediction, conf_thres=0.25, iou_thres=0.45, classe
         # Detections matrix nx6 (xyxy, conf, landmarks, cls)
         if multi_label:
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
+            x = np.concatenate((box[i], x[i, j + 5, None], j[:, None].float()), 1)
         else:  # best class only
-            conf, j = x[:, 5:].max(1, keepdim=True)
-            x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
+            conf, j = x[:, 5:].max(axis=1, keepdims=True), np.expand_dims(np.argmax((x[:, 5:]), axis=1), axis=1)
+            x = np.concatenate((box, conf, j.astype(np.float32)), 1)[conf.reshape(-1) > conf_thres]
 
         # Filter by class
         if classes is not None:
-            x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
+            x = x[(x[:, 5:6] == np.array(classes)).any(1)]
 
         # If none remain process next image
         n = x.shape[0]  # number of boxes
@@ -248,7 +281,8 @@ def non_max_suppression_face(prediction, conf_thres=0.25, iou_thres=0.45, classe
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
 
-        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+        # i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+        i = numpy_nms(boxes, scores, iou_thres)
 
         # if i.shape[0] > max_det:  # limit detections
         #    i = i[:max_det]
@@ -333,3 +367,57 @@ def letterbox(img, new_shape=(320, 320), color=(114, 114, 114), auto=False, scal
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
     return img, ratio, (dw, dh)
+
+
+class DecoderYoloV5:
+
+    def __init__(self):
+        self.nc = 1
+        self.anchors = np.array([[4, 5, 8, 10, 13, 16],
+                                 [23, 29, 43, 55, 73, 105],
+                                 [146, 217, 231, 300, 335, 433]])
+        self.stride = np.array([8, 16, 32])
+        self.no = self.nc + 5
+        self.nl = len(self.anchors)
+        self.na = len(self.anchors[0]) // 2
+
+        self.anchors_grid = np.array(self.anchors).astype(np.float32).reshape((3, -1, 2))
+        self.anchors = self.anchors_grid / self.stride.reshape((-1, 1, 1))
+        self.stride = self.stride
+
+    def forward(self, outputs):
+        a = outputs[:, 0:18 * 40 * 40].reshape((1, 18, 40, 40))
+        a = a.reshape((1, 3, 6, 40, 40)).transpose((0, 1, 3, 4, 2))  # .contiguous()
+        b = outputs[:, 18 * 40 * 40:18 * 40 * 40 + 18 * 20 * 20].reshape((1, 18, 20, 20))
+        b = b.reshape((1, 3, 6, 20, 20)).transpose((0, 1, 3, 4, 2))  # .contiguous()
+        c = outputs[:, 18 * 40 * 40 + 18 * 20 * 20:].reshape((1, 18, 10, 10))
+        c = c.reshape((1, 3, 6, 10, 10)).transpose((0, 1, 3, 4, 2))  # .contiguous()
+
+        anchor_grid = self.anchors_grid.reshape((3, 1, -1, 1, 1, 2))
+        feature_map_a = self._decode(a, 0, anchor_grid)
+        feature_map_b = self._decode(b, 1, anchor_grid)
+        feature_map_c = self._decode(c, 2, anchor_grid)
+
+        return np.concatenate((feature_map_a, feature_map_b, feature_map_c), axis=1)
+
+    def _decode(self, output, idx, anchor_grid):
+        batch_size, n_anchor, h, w, n_output = output.shape
+        grid = self._make_grid(w, h)
+        y = np.full_like(output, 0)
+        class_range = list(range(0, 5 + self.nc))
+        y[..., class_range] = self._sigmoid(output[..., class_range])  # .sigmoid()
+        y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + grid) * self.stride[idx]  # xy
+        y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * anchor_grid[idx]  # wh
+
+        return y.reshape((batch_size, -1, n_output))
+
+    @staticmethod
+    def _make_grid(nx=20, ny=20):
+        x = np.linspace(0, nx - 1, nx)
+        y = np.linspace(0, ny - 1, ny)
+        xv, yv = np.meshgrid(x, y)
+        return np.stack((xv, yv), axis=2).reshape((1, 1, ny, nx, 2))
+
+    @staticmethod
+    def _sigmoid(x):
+        return 1 / (1 + np.exp(-x))

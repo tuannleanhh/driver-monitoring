@@ -38,7 +38,7 @@ class HopeNetEstimator:
         t2 = time.time()
         yaw, pitch, roll, type_face = pred
 
-        return yaw, pitch, roll, type_face, 1 / (t2 - t1)
+        return yaw, pitch, roll, type_face, t2 - t1
 
     def estimate(self, image, x_min, y_min, x_max, y_max):
         image = self.crop_face(image.copy(), x_min, y_min, x_max, y_max)
