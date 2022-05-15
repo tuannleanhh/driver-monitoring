@@ -67,14 +67,12 @@ class DrowsinessDetector:
         return pred
 
     def detect(self, image):
-        reye_image, leye_image, med_fps = self._detect_eyes(image.copy())
+        reye_image, leye_image = self._detect_eyes(image.copy())
         if reye_image is not None and leye_image is not None:
             reye_image, leye_image = self._preprocess_img(reye_image), self._preprocess_img(leye_image)
             if reye_image is not None and leye_image is not None:
                 eyes_image = np.concatenate((reye_image, leye_image), axis=0)
-                t1 = time.time()
                 reye_pred, leye_pred = self.inference(eyes_image)
-                t2 = time.time()
                 return reye_pred, leye_pred
             else:
                 return None, None
